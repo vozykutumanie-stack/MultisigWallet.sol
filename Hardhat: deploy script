@@ -1,0 +1,26 @@
+const hre = require("hardhat");
+
+async function main() {
+  const [deployer] = await hre.ethers.getSigners();
+  console.log("Deploying as:", deployer.address);
+
+  // Настройка: три владельца и требуемые 2 подписи
+  const owners = [
+    process.env.OWNER1 || deployer.address,
+    process.env.OWNER2 || deployer.address,
+    process.env.OWNER3 || deployer.address
+  ].filter((v, i, a) => a.indexOf(v) === i); // unique
+
+  const required = parseInt(process.env.REQUIRED || "2");
+
+  const MS = await hre.ethers.getContractFactory("MultisigWallet");
+  const ms = await MS.deploy(owners, required);
+  await ms.waitForDeployment();
+
+  console.log("MultisigWallet deployed to:", await ms.getAddress());
+}
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

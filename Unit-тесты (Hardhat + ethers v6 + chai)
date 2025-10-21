@@ -1,0 +1,68 @@
+const { expect } = require("chai");
+const { ethers } = require("hardhat");
+
+describe("MultisigWallet", function () {
+  let Multisig, ms;
+  let owner1, owner2, owner3, nonOwner;
+  beforeEach(async () => {
+    [owner1, owner2, owner3, nonOwner] = await ethers.getSigners();
+    Multisig = await ethers.getContractFactory("MultisigWallet");
+    ms = await Multisig.deploy([owner1.address, owner2.address, owner3.address], 2);
+    await ms.waitForDeployment();
+  });
+
+  it("should accept deposits", async () => {
+    await owner1.sendTransaction({ to: await ms.getAddress(), value: ethers.parseEther("1") });
+    // read event? simply check contract balance
+    const bal = await ethers.provider.getBalance(await ms.getAddress());
+    expect(bal).to.equal(ethers.parseEther("1"));
+  });
+
+  it("submit/confirm/execute ETH transfer", async () => {
+    const recipient = nonOwner.address;
+    // submit tx: send 0.5 ETH to recipient
+    await ms.connect(owner1).submitTransaction(recipient, ethers.parseEther("0.5"), "0x");
+    const txCount = await ms.getTransactionCount();
+    expect(txCount).to.equal(1);
+
+    // owner1 confirm
+    await ms.connect(owner1).confirmTransaction(0);
+    // owner2 confirm
+    await ms.connect(owner2).confirmTransaction(0);
+
+    // fund contract so it can send ETH
+    await owner1.sendTransaction({ to: await ms.getAddress(), value: ethers.parseEther("1") });
+
+    // execute
+    const before = await ethers.provider.getBalance(recipient);
+    await ms.connect(owner2).executeTransaction(0);
+    const after = await ethers.provider.getBalance(recipient);
+    expect(after - before).to.equal(ethers.parseEther("0.5"));
+  });
+
+  it("cannot execute without enough confirmations", async () => {
+    const recipient = nonOwner.address;
+    await ms.connect(owner1).submitTransaction(recipient, ethers.parseEther("0.1"), "0x");
+    await ms.connect(owner1).confirmTransaction(0);
+    await expect(ms.connect(owner1).executeTransaction(0)).to.be.revertedWith("insufficient confirmations");
+  });
+
+  it("owner management via multisig flow: add owner", async () => {
+    // spawn a transaction to call _addOwner(newOwner)
+    const newOwner = nonOwner.address;
+    const iface = ms.interface;
+    const data = iface.encodeFunctionData("_addOwner", [newOwner]);
+
+    await ms.connect(owner1).submitTransaction(ms.target ?? await ms.getAddress(), 0, data);
+    // confirm by two owners
+    await ms.connect(owner1).confirmTransaction(0);
+    await ms.connect(owner2).confirmTransaction(0);
+
+    // execute
+    await ms.connect(owner1).executeTransaction(0);
+
+    expect(await ms.isOwner(newOwner)).to.equal(true);
+    const owners = await ms.getOwners();
+    expect(owners.includes(newOwner)).to.equal(true);
+  });
+});
